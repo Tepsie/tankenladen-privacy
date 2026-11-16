@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bronnentest Tanken en Laden</title>
+<style>
+  :root { --bg: #eef1f6; --card: #ffffff; --fg: #141b2b; --muted: #5b6478; --line: #d6dce7; --accent: #173a7a; --ok: #1d7a46; --bad: #a33a2a; --warn: #9a6400; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0d121c; --card: #161d2b; --fg: #e7ebf3; --muted: #9aa4b8; --line: #283246; --accent: #8fb0f0; --ok: #4fbf7f; --bad: #e0705e; --warn: #f2b632; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 32px max(16px, env(safe-area-inset-left)); }
+  main { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+  h1 { margin: 8px 0 0; font-size: 24px; color: var(--accent); }
+  p { margin: 0; color: var(--muted); }
+  button { font: inherit; font-weight: 700; height: 46px; border: 0; border-radius: 10px; background: var(--accent); color: #fff; cursor: pointer; }
+  @media (prefers-color-scheme: dark) { button { color: #0d121c; } }
+  .row { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; }
+  .row b { font-size: 16px; }
+  .row small { grid-column: 1 / -1; color: var(--muted); overflow-wrap: anywhere; }
+  .st { font-weight: 700; white-space: nowrap; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); } .wait { color: var(--muted); }
+  #summary { font-weight: 700; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bronnentest</h1>
+  <p>Deze pagina controleert of de gegevens voor Tanken en Laden ook vanuit een website op te halen zijn. Tik op de knop en wacht tot alles klaar is. Maak daarna een schermafbeelding.</p>
+  <button id="go">Start de test</button>
+  <div id="rows"></div>
+  <p id="summary"></p>
+</main>
+<script>
+(() => {
+  const tests = [
+    { name: "Tankerkönig (brandstofprijzen)", run: async () => {
+        const r = await fetch("https://creativecommons.tankerkoenig.de/json/list.php?lat=50.7753&lng=6.0839&rad=2&type=all&apikey=00000000-0000-0000-0000-000000000002");
+        const d = await r.json();
+        if (!d.ok) throw new Error(d.message || "antwoord niet ok");
+        return (d.stations || []).length + " stations ontvangen";
+      } },
+    { name: "NDW live (laadpunten)", run: async () => {
+        const r = await fetch("https://dotnl.ndw.nu/api/rest/geojson/dynamic-road-status/charge-point-data/v1/features?bbox=6.16,51.36,6.19,51.38");
+        if (!r.ok) throw new Error("code " + r.status);
+        const d = await r.json();
+        return (d.features || []).length + " laadpunten ontvangen";
+      } },
+    { name: "NDW tarievenbestand (laadprijzen)", run: async () => {
+        if (!("DecompressionStream" in window)) return { warn: "Bestand bereikbaar? Niet getest: deze browser kan het bestand niet uitpakken" };
+        const ctrl = new AbortController();
+        const r = await fetch("https://opendata.ndw.nu/charging_point_tariffs_ocpi.json.gz", { signal: ctrl.signal });
+        if (!r.ok) throw new Error("code " + r.status);
+        const reader = r.body.pipeThrough(new DecompressionStream("gzip")).getReader();
+        const { value } = await reader.read();
+        ctrl.abort();
+        const start = new TextDecoder().decode(value || new Uint8Array()).trim().slice(0, 40);
+        return "bereikbaar en uit te pakken (begint met " + start.replace(/\s+/g, " ") + "…)";
+      } },
+    { name: "CBS (landelijk gemiddelde)", run: async () => {
+        const r = await fetch("https://opendata.cbs.nl/ODataApi/odata/80416ned/TypedDataSet?$top=1");
+        if (!r.ok) throw new Error("code " + r.status);
+        const d = await r.json();
+        return (d.value || []).length ? "meting ontvangen" : "geen meting in het antwoord";
+      } },
+    { name: "OpenStreetMap (plaatsen zoeken)", run: async () => {
+        const r = await fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=nl&q=Venlo");
+        if (!r.ok) throw new Error("code " + r.status);
+        const d = await r.json();
+        return d.length ? "gevonden: " + d[0].display_name.split(",")[0] : "geen resultaat";
+      } },
+    { name: "OpenStreetMap (kaart)", run: () => new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res("kaartstukje geladen");
+        img.onerror = () => rej(new Error("kaartstukje niet geladen"));
+        img.src = "https://tile.openstreetmap.org/12/2120/1365.png";
+      }) }
+  ];
+  const rows = document.getElementById("rows");
+  rows.innerHTML = tests.map((t, i) => '<div class="row"><b>' + t.name + '</b><span class="st wait" id="s' + i + '">–</span><small id="d' + i + '"></small></div>').join("") +
+    '<div class="row"><b>Browser</b><span class="st" id="sb"></span><small id="db"></small></div>';
+  const ua = navigator.userAgent;
+  const iosv = (ua.match(/OS (\d+)_(\d+)/) || []).slice(1).join(".");
+  document.getElementById("sb").textContent = "info";
+  document.getElementById("db").textContent = (iosv ? "iOS " + iosv + " · " : "") + ("DecompressionStream" in window ? "kan bestanden uitpakken" : "kan geen bestanden uitpakken") +
+    " · " + (window.matchMedia("(display-mode: standalone)").matches || navigator.standalone ? "geopend vanaf beginscherm" : "geopend in de browser");
+
+  document.getElementById("go").addEventListener("click", async e => {
+    e.target.disabled = true; e.target.textContent = "Bezig…";
+    let ok = 0, bad = 0;
+    for (let i = 0; i < tests.length; i++) {
+      const s = document.getElementById("s" + i), d = document.getElementById("d" + i);
+      s.className = "st wait"; s.textContent = "bezig";
+      try {
+        const out = await Promise.race([tests[i].run(), new Promise((_, rej) => setTimeout(() => rej(new Error("geen antwoord binnen 20 seconden")), 20000))]);
+        if (out && out.warn) { s.className = "st warn"; s.textContent = "let op"; d.textContent = out.warn; }
+        else { s.className = "st ok"; s.textContent = "werkt"; d.textContent = out; ok++; }
+      } catch (err) {
+        s.className = "st bad"; s.textContent = "geblokkeerd";
+        d.textContent = (err && err.name === "TypeError") ? "De bron staat ophalen vanuit een website niet toe (of er is geen verbinding)." : String(err.message || err);
+        bad++;
+      }
+    }
+    document.getElementById("summary").textContent = ok + " van " + tests.length + " bronnen werken" + (bad ? ", " + bad + " geblokkeerd." : ".");
+    e.target.disabled = false; e.target.textContent = "Test opnieuw";
+  });
+})();
+</script>
+</body>
+</html>
